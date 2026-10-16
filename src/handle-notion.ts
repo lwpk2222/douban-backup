@@ -5,13 +5,12 @@ import { Client, type DatabaseObjectResponse } from '@notionhq/client';
 import { type CreatePageParameters } from '@notionhq/client/build/src/api-endpoints';
 import scrapyDouban from './handle-douban';
 import { getDataSourceId, sleep, buildPropertyValue } from './utils';
-import { PropertyTypeMap, EMOJI } from './const';
+import { EMOJI } from './const';
 import DB_PROPERTIES from '../cols.json';
 import {
   ItemCategory,
   type FeedItem,
   type NotionUrlPropType,
-  type DB_PROPERTIES_KEYS,
   type FailedItem,
 } from './types';
 
@@ -91,12 +90,15 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
 
   consola.start(`Handling ${category} feeds...`);
 
+  const sourceSchema = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
+  const itemLinkProperty = sourceSchema.properties['豆瓣链接'] ? '豆瓣链接' : DB_PROPERTIES.ITEM_LINK;
+
   // after @notionhq sdk upgraded to v5.0.0, use dataSource instead of database
   const queryItems = await notion.dataSources.query({
     data_source_id: dataSourceId,
     filter: {
       or: categorizedFeeds.map((item) => ({
-        property: DB_PROPERTIES.ITEM_LINK,
+        property: itemLinkProperty,
         url: {
           contains: item.id,
         },
@@ -109,7 +111,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
 
   const alreadyInsertedItems = new Set(queryItems.results.map((i) => {
     if ('properties' in i) {
-      return (i.properties[DB_PROPERTIES.ITEM_LINK] as NotionUrlPropType).url;
+      return (i.properties[itemLinkProperty] as NotionUrlPropType).url;
     }
     return;
   }).filter(v => v));
@@ -129,6 +131,10 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
       itemData[DB_PROPERTIES.RATING] = newFeedItem.rating;
       itemData[DB_PROPERTIES.RATING_DATE] = dayjs(newFeedItem.time).format('YYYY-MM-DD');
       itemData[DB_PROPERTIES.COMMENTS] = newFeedItem.comment;
+      if (category === ItemCategory.Movie || category === ItemCategory.Book) {
+        const states = category === ItemCategory.Movie ? ['想看', '在看', '看过'] : ['想读', '在读', '读过'];
+        itemData['状态'] = states[newFeedItem.status === 'wishlist' ? 0 : newFeedItem.status === 'progress' ? 1 : 2];
+      }
       const successful = await addItemToNotion(itemData, category);
       if (!successful) {
         failedItems.push({
@@ -140,6 +146,9 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
 
     } catch (error) {
       consola.error(error);
+      const statusCode = (error as { response?: { statusCode?: number } })?.response?.statusCode;
+      if ([403, 418, 429].includes(statusCode || 0) ||
+          (error instanceof Error && error.message.includes('Douban access restriction'))) throw error;
       continue;
     }
   }
@@ -168,60 +177,43 @@ async function addItemToNotion(itemData: {
     itemData[DB_PROPERTIES.NAME]
   );
   try {
-    const properties: Record<string, any> = {};
-    const keys = Object.keys(DB_PROPERTIES) as DB_PROPERTIES_KEYS[];
-    keys.shift(); // remove fist one NAME
-    keys.forEach((key) => {
-      if (itemData[DB_PROPERTIES[key]]) {
-        properties[DB_PROPERTIES[key]] = buildPropertyValue(
-          itemData[DB_PROPERTIES[key]],
-          PropertyTypeMap[key],
-          DB_PROPERTIES[key]
-        );
-      }
-    });
-
     const dataSourceId = getDataSourceId(category);
-    if (!dataSourceId) {
-      throw new Error('No data source id found for category: ' + category);
-    }
-
+    if (!dataSourceId) throw new Error('No data source id found for category: ' + category);
     const db = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
     const columns = Object.keys(db.properties);
-    // Support the library's display names while retaining older database schemas.
-    if (category === ItemCategory.Movie || category === ItemCategory.Book) {
-      for (const [original, display] of [
-        [DB_PROPERTIES.RATING_DATE, category === ItemCategory.Movie ? '观影时间' : '阅读时间'],
-        [DB_PROPERTIES.RATING, '评分'],
-      ]) {
-        if (columns.includes(display) && properties[original]) {
-          properties[display] = properties[original];
-          delete properties[original];
+    const aliases: Record<string, string[]> = {
+      [DB_PROPERTIES.MOVIE_TITLE]: ['电影名'],
+      [DB_PROPERTIES.YEAR]: ['年份'],
+      [DB_PROPERTIES.POSTER]: ['封面'],
+      [DB_PROPERTIES.ITEM_LINK]: ['豆瓣链接'],
+      [DB_PROPERTIES.RATING]: ['个人评分', '评分'],
+      [DB_PROPERTIES.RATING_DATE]: category === ItemCategory.Movie
+        ? ['观影日期', '观影时间'] : category === ItemCategory.Book ? ['阅读日期', '阅读时间'] : [],
+    };
+    const properties: Record<string, any> = {};
+    for (const [original, value] of Object.entries(itemData)) {
+      if (value === null || value === undefined || value === '') continue;
+      const target = (aliases[original] || []).find(name => columns.includes(name)) || original;
+      const property = db.properties[target];
+      if (!property) continue;
+      if (property.type === 'select') {
+        let name = String(value);
+        if (original === DB_PROPERTIES.RATING) {
+          const score = Number(value);
+          if (!Number.isInteger(score) || score < 1 || score > 5) continue;
+          name = '⭐'.repeat(score);
+        } else if (target === '制片国家/地区') {
+          name = name.split(/[\/／]/)[0].trim();
         }
-      }
-      if (columns.includes('状态')) {
-        properties['状态'] = { select: { name: category === ItemCategory.Movie ? '看过' : '读过' } };
-      }
-    }
-    if (category === ItemCategory.Book) {
-      if (db.properties[DB_PROPERTIES.ISBN]?.type === 'rich_text' && itemData[DB_PROPERTIES.ISBN]) {
-        properties[DB_PROPERTIES.ISBN] = {
-          rich_text: [{ type: 'text', text: { content: String(itemData[DB_PROPERTIES.ISBN]) } }],
-        };
-      }
-      if (columns.includes('出版时间') && itemData[DB_PROPERTIES.PUBLICATION_DATE]) {
-        properties['出版时间'] = {
-          rich_text: [{ type: 'text', text: { content: String(itemData[DB_PROPERTIES.PUBLICATION_DATE]) } }],
-        };
+        if (name) properties[target] = { select: { name } };
+      } else {
+        properties[target] = buildPropertyValue(
+          value,
+          property.type as Parameters<typeof buildPropertyValue>[1],
+          original === DB_PROPERTIES.RATING ? DB_PROPERTIES.RATING : target
+        );
       }
     }
-    // remove cols which are not in the current database
-    const propKeys = Object.keys(properties);
-    propKeys.map((prop) => {
-      if (columns.indexOf(prop) < 0) {
-        delete properties[prop];
-      }
-    });
 
     const postData: CreatePageParameters = {
       parent: {
