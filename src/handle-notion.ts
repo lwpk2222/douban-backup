@@ -247,7 +247,8 @@ async function addItemToNotion(itemData: {
       };
     }
 
-    if ((category === ItemCategory.Movie || category === ItemCategory.Book) && itemData[DB_PROPERTIES.COMMENTS]) {
+    if ((category === ItemCategory.Movie || category === ItemCategory.Book) &&
+        !db.properties[DB_PROPERTIES.COMMENTS] && itemData[DB_PROPERTIES.COMMENTS]) {
       const comment = String(itemData[DB_PROPERTIES.COMMENTS]);
       postData.children = [{
         object: 'block',
