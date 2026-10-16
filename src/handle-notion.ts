@@ -188,10 +188,10 @@ async function addItemToNotion(itemData: {
 
     const db = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
     const columns = Object.keys(db.properties);
-    // Keep the book schema unchanged while supporting the movie display names.
-    if (category === ItemCategory.Movie) {
+    // Support the library's display names while retaining older database schemas.
+    if (category === ItemCategory.Movie || category === ItemCategory.Book) {
       for (const [original, display] of [
-        [DB_PROPERTIES.RATING_DATE, '观影时间'],
+        [DB_PROPERTIES.RATING_DATE, category === ItemCategory.Movie ? '观影时间' : '阅读时间'],
         [DB_PROPERTIES.RATING, '评分'],
       ]) {
         if (columns.includes(display) && properties[original]) {
@@ -200,7 +200,19 @@ async function addItemToNotion(itemData: {
         }
       }
       if (columns.includes('状态')) {
-        properties['状态'] = { select: { name: '看过' } };
+        properties['状态'] = { select: { name: category === ItemCategory.Movie ? '看过' : '读过' } };
+      }
+    }
+    if (category === ItemCategory.Book) {
+      if (db.properties[DB_PROPERTIES.ISBN]?.type === 'rich_text' && itemData[DB_PROPERTIES.ISBN]) {
+        properties[DB_PROPERTIES.ISBN] = {
+          rich_text: [{ type: 'text', text: { content: String(itemData[DB_PROPERTIES.ISBN]) } }],
+        };
+      }
+      if (columns.includes('出版时间') && itemData[DB_PROPERTIES.PUBLICATION_DATE]) {
+        properties['出版时间'] = {
+          rich_text: [{ type: 'text', text: { content: String(itemData[DB_PROPERTIES.PUBLICATION_DATE]) } }],
+        };
       }
     }
     // remove cols which are not in the current database
@@ -234,7 +246,7 @@ async function addItemToNotion(itemData: {
       };
     }
 
-    if (category === ItemCategory.Movie && itemData[DB_PROPERTIES.COMMENTS]) {
+    if ((category === ItemCategory.Movie || category === ItemCategory.Book) && itemData[DB_PROPERTIES.COMMENTS]) {
       const comment = String(itemData[DB_PROPERTIES.COMMENTS]);
       postData.children = [{
         object: 'block',
