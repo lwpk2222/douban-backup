@@ -5,6 +5,9 @@ name: sync-rss
 
 on:
   workflow_dispatch: # manual trigger
+  push:
+    paths:
+      - '.github/workflows/sync-rss.js.yml'
   schedule:
     # https://docs.github.com/en/actions/reference/events-that-trigger-workflows#scheduled-events
     # Runs every 6 hours
@@ -22,9 +25,9 @@ jobs:
 
     env:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-      NOTION_MOVIE_DATABASE_ID: ${{ secrets.NOTION_MOVIE_DATABASE_ID }}
+      NOTION_MOVIE_DATABASE_ID: '9301f4f3-6860-411c-b151-56db0664dda2'
       NOTION_MUSIC_DATABASE_ID: ${{ secrets.NOTION_MUSIC_DATABASE_ID }}
-      NOTION_BOOK_DATABASE_ID: ${{ secrets.NOTION_BOOK_DATABASE_ID }}
+      NOTION_BOOK_DATABASE_ID: 'e0c6bcc0-cef6-4f1e-8e27-f58366ab3ccb'
       NOTION_GAME_DATABASE_ID: ${{ secrets.NOTION_GAME_DATABASE_ID }}
       NOTION_DRAMA_DATABASE_ID: ${{ secrets.NOTION_DRAMA_DATABASE_ID }}
       DOUBAN_USER_ID: ${{ secrets.DOUBAN_USER_ID }}
@@ -37,5 +40,23 @@ jobs:
       uses: actions/setup-node@v6
       with:
         node-version: ${{ matrix.node-version }}
+    - name: Verify Notion library access (no Douban requests)
+      run: |
+        node --input-type=module <<'NODE'
+        for (const [category, id] of [['movie', process.env.NOTION_MOVIE_DATABASE_ID], ['book', process.env.NOTION_BOOK_DATABASE_ID]]) {
+          const response = await fetch('https://api.notion.com/v1/data_sources/' + id, {
+            headers: {'Authorization': 'Bearer ' + process.env.NOTION_TOKEN, 'Notion-Version': '2025-09-03'}
+          });
+          if (!response.ok) throw new Error(category + ' Notion access check failed: HTTP ' + response.status);
+          const data = await response.json();
+          const date = category === 'movie' ? '观影时间' : '阅读时间';
+          for (const name of [date, '评分', '状态', '条目链接']) {
+            if (!data.properties[name]) throw new Error(category + ' missing property: ' + name);
+          }
+          console.log(category + ' library access and schema verified');
+        }
+        NODE
     - run: npm ci
+      if: github.event_name != 'push'
     - run: npm run sync || exit 1
+      if: github.event_name != 'push'
