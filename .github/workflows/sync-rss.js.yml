@@ -50,8 +50,19 @@ jobs:
           if (!response.ok) throw new Error(category + ' Notion access check failed: HTTP ' + response.status);
           const data = await response.json();
           const date = category === 'movie' ? '观影日期' : '阅读日期';
-          for (const name of [date, '个人评分', '状态', '豆瓣链接']) {
-            if (!data.properties[name]) throw new Error(category + ' missing property: ' + name);
+          const expected = {
+            [category === 'movie' ? '电影名' : '书名']: 'title',
+            [date]: 'date', '个人评分': 'select', '状态': 'select',
+            '豆瓣链接': 'url', '封面': 'files', '我的短评': 'rich_text',
+            '豆瓣评分': 'number',
+            ...(category === 'movie'
+              ? {'类型': 'multi_select', '制片国家/地区': 'select', '片长': 'rich_text'}
+              : {'作者': 'rich_text', '译者': 'rich_text', '原作名': 'rich_text', '页数': 'number'})
+          };
+          for (const [name, type] of Object.entries(expected)) {
+            if (data.properties[name]?.type !== type) {
+              throw new Error(category + ' property missing or wrong type: ' + name + ' (expected ' + type + ')');
+            }
           }
           if (data.properties['个人评分'].type !== 'select' || data.properties['豆瓣评分'].type !== 'number') {
             throw new Error(category + ' score property types do not match');
