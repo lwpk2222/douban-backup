@@ -17,6 +17,14 @@ import {
 // https://github.com/makenotion/notion-sdk-js/issues/280#issuecomment-1178523498
 type EmojiRequest = Extract<CreatePageParameters['icon'], { type?: 'emoji'; }>['emoji'];
 
+function movieTitleWithYear(title: string, year: unknown): string {
+  const match = String(year ?? '').trim().match(/^(\d{4})(?:\.0)?$/);
+  if (!match) return title;
+  const suffix = ` (${match[1]})`;
+  const cleanTitle = title.trimEnd();
+  return cleanTitle.endsWith(suffix) ? cleanTitle : cleanTitle + suffix;
+}
+
 dotenv.config();
 
 const notion = new Client({
@@ -208,7 +216,8 @@ async function addItemToNotion(itemData: {
         if (name) properties[target] = { select: { name } };
       } else {
         properties[target] = buildPropertyValue(
-          value,
+          category === ItemCategory.Movie && original === DB_PROPERTIES.MOVIE_TITLE
+            ? movieTitleWithYear(String(value), itemData[DB_PROPERTIES.YEAR]) : value,
           property.type as Parameters<typeof buildPropertyValue>[1],
           original === DB_PROPERTIES.RATING ? DB_PROPERTIES.RATING : target
         );
