@@ -1,40 +1,13 @@
 import got from 'got';
-import crypto from 'crypto';
 import { CookieJar } from 'tough-cookie';
 import { JSDOM } from 'jsdom';
 import dayjs from 'dayjs';
 import { consola } from 'consola';
 import { ItemCategory } from './types';
 import DB_PROPERTIES from '../cols.json';
-import { sleep } from './utils';
 
 // 创建一个持久化的 CookieJar 实例，建议放在函数外部以维持会话
 const cookieJar = new CookieJar();
-
-// 辅助函数：解 PoW 难题
-async function solveDoubanPoW(html: string) {
-  const dom = new JSDOM(html);
-  const doc = dom.window.document;
-
-  const tok = (doc.querySelector('#tok') as HTMLInputElement)?.value;
-  const cha = (doc.querySelector('#cha') as HTMLInputElement)?.value;
-  const red = (doc.querySelector('#red') as HTMLInputElement)?.value;
-
-  if (!tok || !cha) return null;
-
-  let nonce = 0;
-  const difficulty = 4;
-  const target = '0'.repeat(difficulty);
-
-  // 开始挖矿
-  while (true) {
-    nonce++;
-    const hash = crypto.createHash('sha512').update(cha + nonce).digest('hex');
-    if (hash.startsWith(target)) break;
-  }
-
-  return { tok, cha, sol: nonce, red };
-}
 
 export default async function scrapyDouban(link: string, category: ItemCategory): Promise<{
     [key: string]: string | string[] | number | null | undefined;
@@ -48,37 +21,16 @@ export default async function scrapyDouban(link: string, category: ItemCategory)
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Referer': link,
     },
-    followRedirect: true
+    followRedirect: true,
+    retry: { limit: 0 },
+    timeout: { request: 30000 }
   });
 
-  let response = await client(link);
-
-  // 4. 检查是否命中了 PoW 挑战页
-  if (response.body.includes('id="sec"') && response.body.includes('sha512')) {
-    consola.info('Detected Douban PoW challenge, solving...');
-    const payload = await solveDoubanPoW(response.body);
-
-    if (payload) {
-      // 添加随机延迟更保险 600ms~1200ms
-      const delay = Math.floor(Math.random() * 600) + 600;
-      await sleep(delay);
-      // 提交验证表单
-      await client.post('https://sec.douban.com/c', {
-        form: payload
-      });
-      consola.success('PoW solved and submitted. Retrying original request...');
-
-      // 验证通过后，带上新 Cookie 重新请求
-      response = await client(link);
-    }
-  }
-
+  const response = await client(link);
   const dom = new JSDOM(response.body);
   const doc = dom.window.document;
-
-  // 检查是否依然在验证页（可能 IP 被彻底封禁或验证失败）
-  if (doc.querySelector('#sec')) {
-    throw new Error('Failed to bypass Douban security page. Might need a proxy or manual login.');
+  if (doc.querySelector('#sec') || response.body.includes('id="sec"')) {
+    throw new Error('Douban access restriction: stopped without solving challenges or retrying.');
   }
 
   switch (category) {
@@ -103,6 +55,21 @@ const ImgDefaultTitle = {
   Cover: '点击上传封面图片',
 };
 const InfoSelector = '#info span.pl';
+
+function infoValue(doc: Document, label: string): string {
+  const marker = [...doc.querySelectorAll(InfoSelector)]
+    .find(node => node.textContent?.trim().replace(/[:：]$/, '') === label);
+  let value = '';
+  for (let node = marker?.nextSibling; node && node.nodeName !== 'BR'; node = node.nextSibling) {
+    value += node.textContent || '';
+  }
+  return value.replace(/\s+/g, ' ').trim().replace(/^[:：]\s*/, '');
+}
+
+function publicRating(doc: Document): number | null {
+  const text = doc.querySelector('[property="v:average"]')?.textContent?.trim();
+  return text && Number.isFinite(Number(text)) ? Number(text) : null;
+}
 
 function buildMovieItem(doc: Document) {
   const title = doc.querySelector('#content h1 [property="v:itemreviewed"]')?.textContent?.trim() || '';
@@ -138,6 +105,9 @@ function buildMovieItem(doc: Document) {
     [DB_PROPERTIES.ACTORS]: actors,
     [DB_PROPERTIES.GENRE]: genre,
     [DB_PROPERTIES.IMDB_LINK]: imdbLink, // optional
+    '制片国家/地区': infoValue(doc, '制片国家/地区').split(/[\/／]/)[0].trim(),
+    '片长': [...doc.querySelectorAll('[property="v:runtime"]')].map(node => node.textContent?.trim()).filter(Boolean).join(' / ') || infoValue(doc, '片长'),
+    '豆瓣评分': publicRating(doc),
   };
 }
 
@@ -220,7 +190,11 @@ function buildBookItem(doc: Document) {
     [DB_PROPERTIES.COVER]: cover, // optional
     [DB_PROPERTIES.WRITER]: writer, // optional
     [DB_PROPERTIES.PUBLISHING_HOUSE]: publisher, // optional
-    [DB_PROPERTIES.BOOK_TITLE]: bookTitle, // optional
+    [DB_PROPERTIES.BOOK_TITLE]: title,
+    '译者': infoValue(doc, '译者'),
+    '原作名': infoValue(doc, '原作名'),
+    '页数': /^\d+$/.test(infoValue(doc, '页数')) ? Number(infoValue(doc, '页数')) : null,
+    '豆瓣评分': publicRating(doc),
     [DB_PROPERTIES.PUBLICATION_DATE]: publishDate, // optional
     [DB_PROPERTIES.ISBN]: isbn, // optional
   };
