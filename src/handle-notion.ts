@@ -188,6 +188,21 @@ async function addItemToNotion(itemData: {
 
     const db = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
     const columns = Object.keys(db.properties);
+    // Keep the book schema unchanged while supporting the movie display names.
+    if (category === ItemCategory.Movie) {
+      for (const [original, display] of [
+        [DB_PROPERTIES.RATING_DATE, '观影时间'],
+        [DB_PROPERTIES.RATING, '评分'],
+      ]) {
+        if (columns.includes(display) && properties[original]) {
+          properties[display] = properties[original];
+          delete properties[original];
+        }
+      }
+      if (columns.includes('状态')) {
+        properties['状态'] = { select: { name: '看过' } };
+      }
+    }
     // remove cols which are not in the current database
     const propKeys = Object.keys(properties);
     propKeys.map((prop) => {
@@ -217,6 +232,20 @@ async function addItemToNotion(itemData: {
           url: (properties[DB_PROPERTIES.POSTER] || properties[DB_PROPERTIES.COVER])?.files[0]?.external?.url, // cannot be empty string or null
         },
       };
+    }
+
+    if (category === ItemCategory.Movie && itemData[DB_PROPERTIES.COMMENTS]) {
+      const comment = String(itemData[DB_PROPERTIES.COMMENTS]);
+      postData.children = [{
+        object: 'block',
+        type: 'paragraph',
+        paragraph: {
+          rich_text: Array.from({ length: Math.ceil(comment.length / 2000) }, (_, i) => ({
+            type: 'text' as const,
+            text: { content: comment.slice(i * 2000, (i + 1) * 2000) },
+          })),
+        },
+      }];
     }
 
     const response = await notion.pages.create(postData);
