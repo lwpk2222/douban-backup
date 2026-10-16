@@ -25,9 +25,9 @@ jobs:
 
     env:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-      NOTION_MOVIE_DATABASE_ID: '9301f4f3-6860-411c-b151-56db0664dda2'
+      NOTION_MOVIE_DATABASE_ID: '3cebb357-cbe5-46a8-bf5f-694b21ba782d'
       NOTION_MUSIC_DATABASE_ID: ${{ secrets.NOTION_MUSIC_DATABASE_ID }}
-      NOTION_BOOK_DATABASE_ID: 'e0c6bcc0-cef6-4f1e-8e27-f58366ab3ccb'
+      NOTION_BOOK_DATABASE_ID: 'd5861526-c8a1-4e51-939f-24bea347b26c'
       NOTION_GAME_DATABASE_ID: ${{ secrets.NOTION_GAME_DATABASE_ID }}
       NOTION_DRAMA_DATABASE_ID: ${{ secrets.NOTION_DRAMA_DATABASE_ID }}
       DOUBAN_USER_ID: ${{ secrets.DOUBAN_USER_ID }}
@@ -49,9 +49,17 @@ jobs:
           });
           if (!response.ok) throw new Error(category + ' Notion access check failed: HTTP ' + response.status);
           const data = await response.json();
-          const date = category === 'movie' ? '观影时间' : '阅读时间';
-          for (const name of [date, '评分', '状态', '条目链接']) {
+          const date = category === 'movie' ? '观影日期' : '阅读日期';
+          for (const name of [date, '个人评分', '状态', '豆瓣链接']) {
             if (!data.properties[name]) throw new Error(category + ' missing property: ' + name);
+          }
+          if (data.properties['个人评分'].type !== 'select' || data.properties['豆瓣评分'].type !== 'number') {
+            throw new Error(category + ' score property types do not match');
+          }
+          for (let score = 1; score <= 5; score++) {
+            if (!data.properties['个人评分'].select.options.some(option => option.name === '⭐'.repeat(score))) {
+              throw new Error(category + ' missing star rating option');
+            }
           }
           console.log(category + ' library access and schema verified');
         }
