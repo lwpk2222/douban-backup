@@ -134,7 +134,23 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
 
   for (const newFeedItem of newFeeds) {
     try {
-      const itemData = await scrapyDouban(newFeedItem.link, category);
+      // RSS-only mode avoids Douban detail pages while access is restricted.
+      let itemData: Record<string, string | string[] | number | null | undefined>;
+      if (process.env.DOUBAN_RSS_ONLY === 'true') {
+        if (!newFeedItem.title) throw new Error('RSS item has no usable title: ' + newFeedItem.link);
+        const titleKey = category === ItemCategory.Movie ? DB_PROPERTIES.MOVIE_TITLE
+          : category === ItemCategory.Book ? DB_PROPERTIES.BOOK_TITLE
+          : category === ItemCategory.Music ? DB_PROPERTIES.MUSIC_TITLE
+          : category === ItemCategory.Game ? DB_PROPERTIES.GAME_TITLE : DB_PROPERTIES.DRAMA_TITLE;
+        itemData = {
+          [DB_PROPERTIES.NAME]: newFeedItem.title,
+          [titleKey]: newFeedItem.title,
+          [category === ItemCategory.Movie ? DB_PROPERTIES.POSTER : DB_PROPERTIES.COVER]: newFeedItem.cover,
+        };
+        consola.info('Using RSS metadata only; detail-only fields remain empty.');
+      } else {
+        itemData = await scrapyDouban(newFeedItem.link, category);
+      }
       itemData[DB_PROPERTIES.ITEM_LINK] = newFeedItem.link;
       itemData[DB_PROPERTIES.RATING] = newFeedItem.rating;
       itemData[DB_PROPERTIES.RATING_DATE] = dayjs(newFeedItem.time).format('YYYY-MM-DD');
@@ -154,6 +170,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
 
     } catch (error) {
       consola.error(error);
+      failedItems.push({ link: newFeedItem.link, title: newFeedItem.title || newFeedItem.id });
       const statusCode = (error as { response?: { statusCode?: number } })?.response?.statusCode;
       if ([403, 418, 429].includes(statusCode || 0) ||
           (error instanceof Error && error.message.includes('Douban access restriction'))) throw error;
