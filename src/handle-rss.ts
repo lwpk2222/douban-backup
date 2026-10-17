@@ -67,7 +67,15 @@ export function handleRSSFeeds(feeds: RSSFeedItem[]): FeedItem[] {
     if (commentElements.length) {
       comment = commentElements[0].textContent!.replace(/^备注: /, '').trim();
     }
+    const subjectLink = [...dom.window.document.querySelectorAll('a')]
+      .find(a => a.href === item.link && a.textContent?.trim());
+    const title = subjectLink?.textContent?.trim() ||
+      item.title!.replace(/^(?:想看|在看|看过|想读|在读|读过|想听|在听|听过|想玩|在玩|玩过)\s*/, '').trim();
+    const image = dom.window.document.querySelector('img')?.getAttribute('src') || '';
+    const cover = /^https?:\/\//.test(image) ? image : undefined;
     const result = {
+      title,
+      cover,
       id,
       link: item.link,
       rating: ratingNumber || null,
