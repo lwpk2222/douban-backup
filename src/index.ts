@@ -2,7 +2,6 @@ import { consola } from 'consola';
 import { fetchRSSFeeds, handleRSSFeeds } from './handle-rss';
 import handleNotion from './handle-notion';
 import handleNeodb from './handle-neodb';
-import { ItemStatus } from './types';
 
 async function main(): Promise<void> {
   const feeds = await fetchRSSFeeds();
@@ -12,10 +11,10 @@ async function main(): Promise<void> {
   }
 
   const normalizedFeeds = handleRSSFeeds(feeds);
-  const completeFeeds = normalizedFeeds.filter(f => f.status === ItemStatus.Complete);
-
-  if (completeFeeds.length) {
-    await handleNotion(completeFeeds);
+  // Sync wishlist, progress and completed marks to their Notion status views.
+  consola.info(`RSS returned ${feeds.length} items; ${normalizedFeeds.length} recognized marks.`);
+  if (normalizedFeeds.length) {
+    await handleNotion(normalizedFeeds);
   }
 
   await handleNeodb(normalizedFeeds);
