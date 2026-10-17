@@ -24,6 +24,8 @@ jobs:
         # See supported Node.js release schedule at https://nodejs.org/en/about/previous-releases
 
     env:
+      # Avoid detail-page requests while Douban access verification is active.
+      DOUBAN_RSS_ONLY: 'true'
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_MOVIE_DATABASE_ID: '3cebb357-cbe5-46a8-bf5f-694b21ba782d'
       NOTION_MUSIC_DATABASE_ID: ${{ secrets.NOTION_MUSIC_DATABASE_ID }}
