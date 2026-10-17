@@ -23,6 +23,8 @@ export type RSSFeedItem = {
 } & Parser.Item;
 
 export type FeedItem = {
+  title?: string;
+  cover?: string;
   id: string;
   link: string;
   rating: number | null;
