@@ -17,6 +17,7 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     strategy:
       matrix:
@@ -24,8 +25,8 @@ jobs:
         # See supported Node.js release schedule at https://nodejs.org/en/about/previous-releases
 
     env:
-      # Avoid detail-page requests while Douban access verification is active.
-      DOUBAN_RSS_ONLY: 'true'
+      # Full details with one bounded PoW verification, following mtfront's approach.
+      DOUBAN_RSS_ONLY: 'false'
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_MOVIE_DATABASE_ID: '3cebb357-cbe5-46a8-bf5f-694b21ba782d'
       NOTION_MUSIC_DATABASE_ID: ${{ secrets.NOTION_MUSIC_DATABASE_ID }}
@@ -78,6 +79,10 @@ jobs:
         }
         NODE
     - run: npm ci
-      if: github.event_name != 'push'
+    - name: Test detail parsing and bounded verification
+      run: npx tsx scripts/test-detail.ts
+    - name: Verify live movie details from this runner
+      if: github.event_name == 'workflow_dispatch'
+      run: npx tsx scripts/verify-detail.ts
     - run: npm run sync || exit 1
       if: github.event_name != 'push'
