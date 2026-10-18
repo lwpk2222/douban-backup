@@ -85,5 +85,8 @@ jobs:
     - name: Verify live movie details from this runner
       if: github.event_name == 'workflow_dispatch'
       run: npx tsx scripts/verify-detail.ts
+    - name: Verify Notion-managed poster display
+      if: github.event_name == 'workflow_dispatch'
+      run: npx tsx scripts/verify-poster.ts
     - run: npm run sync || exit 1
       if: github.event_name != 'push'
