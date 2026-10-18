@@ -1,4 +1,5 @@
 import got from 'got';
+import { createHash } from 'node:crypto';
 import { CookieJar } from 'tough-cookie';
 import { JSDOM } from 'jsdom';
 import dayjs from 'dayjs';
@@ -8,6 +9,28 @@ import DB_PROPERTIES from '../cols.json';
 
 // 创建一个持久化的 CookieJar 实例，建议放在函数外部以维持会话
 const cookieJar = new CookieJar();
+
+
+/** Bounded implementation of the SHA-512 PoW used by mtfront/douban-backup.
+ * Does not execute page scripts, solve image CAPTCHAs, or rotate proxies.
+ */
+export function solveDoubanPoW(html: string, link: string) {
+  const doc = new JSDOM(html).window.document;
+  const value = (id: string) => (doc.querySelector('#' + id) as HTMLInputElement | null)?.value;
+  const tok = value('tok'), cha = value('cha'), red = value('red');
+  if (!tok || !cha || !red || cha.length > 4096 || tok.length > 16384 ||
+      !html.includes('sha512') || new URL(red, link).href !== new URL(link).href) {
+    throw new Error('Douban access restriction: unsupported verification; no submission made.');
+  }
+  const deadline = Date.now() + 5000;
+  for (let nonce = 1; nonce <= 2000000; nonce++) {
+    if (nonce % 1000 === 0 && Date.now() > deadline) break;
+    if (createHash('sha512').update(cha + nonce).digest('hex').startsWith('0000')) {
+      return { tok, cha, red, sol: nonce };
+    }
+  }
+  throw new Error('Douban access restriction: PoW computation limit reached.');
+}
 
 export default async function scrapyDouban(link: string, category: ItemCategory): Promise<{
     [key: string]: string | string[] | number | null | undefined;
@@ -26,13 +49,36 @@ export default async function scrapyDouban(link: string, category: ItemCategory)
     timeout: { request: 30000 }
   });
 
-  const response = await client(link);
+  let response = await client(link, { throwHttpErrors: false });
+  if (response.body.includes('id="sec"') && response.body.includes('sha512')) {
+    consola.info('Douban returned SHA-512 PoW; attempting one bounded verification.');
+    const form = solveDoubanPoW(response.body, link);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const verification = await client.post('https://sec.douban.com/c', {
+      form, followRedirect: false, throwHttpErrors: false,
+    });
+    if (![200, 302, 303].includes(verification.statusCode)) {
+      throw new Error('Douban access restriction: verification rejected; stopped.');
+    }
+    response = await client(link, { throwHttpErrors: false });
+  }
+  if ([403, 418, 429].includes(response.statusCode)) {
+    throw new Error('Douban access restriction: HTTP ' + response.statusCode + '; stopped.');
+  }
+  if (response.statusCode !== 200) throw new Error('Douban detail HTTP ' + response.statusCode);
   const dom = new JSDOM(response.body);
   const doc = dom.window.document;
   if (doc.querySelector('#sec') || response.body.includes('id="sec"')) {
     throw new Error('Douban access restriction: stopped without solving challenges or retrying.');
   }
 
+  if (!doc.querySelector('#mainpic') || !doc.querySelector('h1')) {
+    throw new Error('Douban access restriction: detail page not available; stopped.');
+  }
+  return parseDoubanDetail(doc, category);
+}
+
+export function parseDoubanDetail(doc: Document, category: ItemCategory) {
   switch (category) {
     case ItemCategory.Movie:
       return buildMovieItem(doc);
