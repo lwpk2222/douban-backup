@@ -45,3 +45,19 @@ assert.deepEqual(Object.keys(patch).sort(),['片长','类型'].sort());
 assert.ok(missingDetailPatch({'电影名':{title:[{text:{content:'标题 (2026)'}}]}},
   {properties:{'电影名':{type:'title',title:[{text:{content:'标题'}}]}}})['电影名']);
 console.log('Enrichment preserves titles with years, personal annotations and existing covers; fills only missing metadata.');
+
+const { uploadPoster } = await import('../src/handle-notion');
+const requests: Array<{url:string,init:any}> = [];
+const mockFetch: typeof fetch = async (url: any, init?: any) => {
+  requests.push({url:String(url),init});
+  if (requests.length === 1) return new Response(new Uint8Array([255,216,255,217]),{headers:{'Content-Type':'image/jpeg'}});
+  if (requests.length === 2) return Response.json({id:'test-upload-id'});
+  return Response.json({status:'uploaded'});
+};
+const managed = await uploadPoster('https://img2.doubanio.com/test.jpg',mockFetch);
+assert.deepEqual(managed,{type:'file_upload',file_upload:{id:'test-upload-id'}});
+assert.equal(requests[0].init.headers.Referer,'https://movie.douban.com/');
+assert.ok(requests[2].init.body instanceof FormData);
+await assert.rejects(uploadPoster('https://example.com/a.jpg',mockFetch),/Unsupported/);
+await assert.rejects(uploadPoster('https://img2.doubanio.com/a.jpg',async () => new Response('<html>error</html>',{headers:{'Content-Type':'text/html'}})),/not an image/);
+console.log('Managed image upload multipart flow and invalid-image rejection passed.');
