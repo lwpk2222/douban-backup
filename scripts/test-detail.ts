@@ -19,3 +19,29 @@ assert.equal(movie['片长'], '94分钟');
 assert.equal(movie['豆瓣评分'], 7.3);
 assert.equal(movie['海报'], 'https://img2.doubanio.com/test.jpg');
 console.log('PoW safety boundaries and complete movie field extraction passed.');
+
+const { missingDetailPatch } = await import('../src/handle-notion');
+const existing = { properties: {
+  '电影名': {type:'title', title:[{text:{content:'已有标题 (2026)'}}]},
+  '封面': {type:'files',files:[{name:'uploaded',type:'file',file:{url:'https://notion.example/image'}}]},
+  '类型': {type:'multi_select',multi_select:[]},
+  '片长': {type:'rich_text',rich_text:[]},
+  '豆瓣评分': {type:'number',number:0},
+  '状态': {type:'select',select:{name:'想看'}},
+  '个人评分': {type:'select',select:{name:'⭐⭐⭐⭐⭐'}},
+  '我的短评': {type:'rich_text',rich_text:[{text:{content:'keep'}}]},
+}};
+const patch = missingDetailPatch({
+  '电影名':{title:[{text:{content:'Remote (2026)'}}]},
+  '封面':{files:[{external:{url:'https://remote.example/image'}}]},
+  '类型':{multi_select:[{name:'科幻'}]},
+  '片长':{rich_text:[{text:{content:'94分钟'}}]},
+  '豆瓣评分':{number:7.3},
+  '状态':{select:{name:'看过'}},
+  '个人评分':{select:{name:'⭐'}},
+  '我的短评':{rich_text:[]},
+},existing);
+assert.deepEqual(Object.keys(patch).sort(),['片长','类型'].sort());
+assert.ok(missingDetailPatch({'电影名':{title:[{text:{content:'标题 (2026)'}}]}},
+  {properties:{'电影名':{type:'title',title:[{text:{content:'标题'}}]}}})['电影名']);
+console.log('Enrichment preserves titles with years, personal annotations and existing covers; fills only missing metadata.');
