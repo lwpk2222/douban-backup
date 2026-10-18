@@ -45,7 +45,7 @@ export function missingDetailPatch(properties: Record<string, any>, existing: an
 
 export async function uploadPoster(url: string, request: typeof fetch = fetch) {
   const source = new URL(url);
-  if (source.protocol !== 'https:' || !/(^|\\.)doubanio\\.com$/.test(source.hostname)) {
+  if (source.protocol !== 'https:' || !/(^|\.)doubanio\.com$/.test(source.hostname)) {
     throw new Error('Unsupported poster source');
   }
   const response = await request(url, {
