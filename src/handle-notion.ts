@@ -25,6 +25,23 @@ function movieTitleWithYear(title: string, year: unknown): string {
   return cleanTitle.endsWith(suffix) ? cleanTitle : cleanTitle + suffix;
 }
 
+
+export function missingDetailPatch(properties: Record<string, any>, existing: any): Record<string, any> {
+  const patch: Record<string, any> = {};
+  const personal = new Set(['个人评分', '评分', '我的短评', '状态', '观影日期', '观影时间', '阅读日期', '阅读时间', '豆瓣链接', DB_PROPERTIES.ITEM_LINK]);
+  for (const [name, value] of Object.entries(properties)) {
+    if (personal.has(name)) continue;
+    const current = existing.properties[name];
+    const raw = current?.[current.type];
+    const missing = raw == null || raw === '' || (Array.isArray(raw) && raw.length === 0);
+    const titleNeedsYear = name === '电影名' && !/\(\d{4}\)$/.test(
+      (current?.title || []).map((t: any) => t.plain_text || t.text?.content || '').join('')
+    );
+    if (missing || titleNeedsYear) patch[name] = value;
+  }
+  return patch;
+}
+
 dotenv.config();
 
 const notion = new Client({
@@ -257,18 +274,7 @@ async function addItemToNotion(itemData: {
 
     if (existing) {
       // Enrich missing catalog data only; preserve personal annotations and uploaded covers.
-      const patch: Record<string, any> = {};
-      const personal = new Set(['个人评分', '评分', '我的短评', '状态', '观影日期', '观影时间', '阅读日期', '阅读时间', '豆瓣链接', DB_PROPERTIES.ITEM_LINK]);
-      for (const [name, value] of Object.entries(properties)) {
-        if (personal.has(name)) continue;
-        const current = existing.properties[name];
-        const raw = current?.[current.type];
-        const missing = raw == null || raw === '' || (Array.isArray(raw) && raw.length === 0);
-        const titleNeedsYear = name === '电影名' && !/\(\d{4}\)$/.test(
-          (current?.title || []).map((t: any) => t.plain_text || t.text?.content || '').join('')
-        );
-        if (missing || titleNeedsYear) patch[name] = value;
-      }
+      const patch = missingDetailPatch(properties, existing);
       if (Object.keys(patch).length) {
         await notion.pages.update({ page_id: existing.id, properties: patch });
         consola.success('Enriched existing item: ' + itemData[DB_PROPERTIES.NAME] + ' fields=' + Object.keys(patch).join(','));
