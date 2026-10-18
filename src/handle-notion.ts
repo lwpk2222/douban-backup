@@ -117,18 +117,31 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
     process.exit(1);
   });
 
-  const alreadyInsertedItems = new Set(queryItems.results.map((i) => {
-    if ('properties' in i) {
-      return (i.properties[itemLinkProperty] as NotionUrlPropType).url;
+  const existingPages = new Map<string, any>();
+  for (const page of queryItems.results) {
+    if ('properties' in page) {
+      const link = (page.properties[itemLinkProperty] as NotionUrlPropType).url;
+      if (link) existingPages.set(link.replace(/^http:/, 'https:'), page);
     }
-    return;
-  }).filter(v => v));
-
-  const newFeeds = categorizedFeeds.filter((item) => {
-    return !alreadyInsertedItems.has(item.link);
+  }
+  const empty = (property: any): boolean => !property ||
+    property[property.type] == null ||
+    (Array.isArray(property[property.type]) && property[property.type].length === 0) ||
+    property[property.type] === '';
+  const needsDetails = (page: any): boolean => {
+    if (category === ItemCategory.Movie) {
+      const title = page.properties['电影名']?.title?.map((t: any) => t.plain_text || t.text?.content || '').join('') || '';
+      return !/\(\d{4}\)$/.test(title) || ['类型', '制片国家/地区', '片长', '豆瓣评分']
+        .some(name => sourceSchema.properties[name] && empty(page.properties[name]));
+    }
+    return category === ItemCategory.Book && ['作者', '页数', '豆瓣评分']
+      .some(name => sourceSchema.properties[name] && empty(page.properties[name]));
+  };
+  const newFeeds = categorizedFeeds.filter(item => {
+    const page = existingPages.get(item.link.replace(/^http:/, 'https:'));
+    return !page || (process.env.DOUBAN_RSS_ONLY !== 'true' && needsDetails(page));
   });
-
-  consola.info(`There are total ${newFeeds.length} new ${category} item(s) need to insert.`);
+  consola.info(`There are total ${newFeeds.length} new or incomplete ${category} item(s) to sync.`);
 
   const failedItems: FailedItem[] = [];
 
@@ -159,14 +172,15 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
         const states = category === ItemCategory.Movie ? ['想看', '在看', '看过'] : ['想读', '在读', '读过'];
         itemData['状态'] = states[newFeedItem.status === 'wishlist' ? 0 : newFeedItem.status === 'progress' ? 1 : 2];
       }
-      const successful = await addItemToNotion(itemData, category);
+      const existing = existingPages.get(newFeedItem.link.replace(/^http:/, 'https:'));
+      const successful = await addItemToNotion(itemData, category, existing);
       if (!successful) {
         failedItems.push({
           link: newFeedItem.link,
           title: itemData.title as string,
         });
       }
-      await sleep(1000);
+      await sleep(10000);
 
     } catch (error) {
       consola.error(error);
@@ -195,7 +209,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
  */
 async function addItemToNotion(itemData: {
     [key: string]: string | string[] | number | null | undefined;
-}, category: ItemCategory): Promise<boolean> {
+}, category: ItemCategory, existing?: any): Promise<boolean> {
   consola.start(
     'Going to insert ',
     itemData[DB_PROPERTIES.RATING_DATE],
@@ -239,6 +253,27 @@ async function addItemToNotion(itemData: {
           original === DB_PROPERTIES.RATING ? DB_PROPERTIES.RATING : target
         );
       }
+    }
+
+    if (existing) {
+      // Enrich missing catalog data only; preserve personal annotations and uploaded covers.
+      const patch: Record<string, any> = {};
+      const personal = new Set(['个人评分', '评分', '我的短评', '状态', '观影日期', '观影时间', '阅读日期', '阅读时间', '豆瓣链接', DB_PROPERTIES.ITEM_LINK]);
+      for (const [name, value] of Object.entries(properties)) {
+        if (personal.has(name)) continue;
+        const current = existing.properties[name];
+        const raw = current?.[current.type];
+        const missing = raw == null || raw === '' || (Array.isArray(raw) && raw.length === 0);
+        const titleNeedsYear = name === '电影名' && !/\(\d{4}\)$/.test(
+          (current?.title || []).map((t: any) => t.plain_text || t.text?.content || '').join('')
+        );
+        if (missing || titleNeedsYear) patch[name] = value;
+      }
+      if (Object.keys(patch).length) {
+        await notion.pages.update({ page_id: existing.id, properties: patch });
+        consola.success('Enriched existing item: ' + itemData[DB_PROPERTIES.NAME] + ' fields=' + Object.keys(patch).join(','));
+      }
+      return true;
     }
 
     const postData: CreatePageParameters = {
