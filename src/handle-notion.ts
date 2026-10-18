@@ -42,6 +42,49 @@ export function missingDetailPatch(properties: Record<string, any>, existing: an
   return patch;
 }
 
+
+export async function uploadPoster(url: string, request: typeof fetch = fetch) {
+  const source = new URL(url);
+  if (source.protocol !== 'https:' || !/(^|\\.)doubanio\\.com$/.test(source.hostname)) {
+    throw new Error('Unsupported poster source');
+  }
+  const response = await request(url, {
+    headers: { Referer: 'https://movie.douban.com/', 'User-Agent': 'Mozilla/5.0' },
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) throw new Error('Poster download HTTP ' + response.status);
+  const contentType = response.headers.get('content-type')?.split(';')[0] || '';
+  if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(contentType)) {
+    throw new Error('Poster response is not an image');
+  }
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength === 0 || bytes.byteLength > 5 * 1024 * 1024) throw new Error('Poster size invalid');
+  const suffix = contentType === 'image/jpeg' ? 'jpg' : contentType.split('/')[1];
+  const filename = 'douban-poster.' + suffix;
+  const headers = { Authorization: 'Bearer ' + process.env.NOTION_TOKEN, 'Notion-Version': '2025-09-03' };
+  const created = await request('https://api.notion.com/v1/file_uploads', {
+    method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'single_part', filename, content_type: contentType }),
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!created.ok) throw new Error('Notion upload creation HTTP ' + created.status);
+  const upload = await created.json() as { id: string };
+  const form = new FormData();
+  form.append('file', new Blob([bytes], { type: contentType }), filename);
+  const sent = await request('https://api.notion.com/v1/file_uploads/' + upload.id + '/send', {
+    method: 'POST', headers, body: form, signal: AbortSignal.timeout(30000),
+  });
+  if (!sent.ok) throw new Error('Notion poster upload HTTP ' + sent.status);
+  const uploaded = await sent.json() as { status: string };
+  if (uploaded.status !== 'uploaded') throw new Error('Notion poster upload not complete');
+  return { type: 'file_upload' as const, file_upload: { id: upload.id } };
+}
+
+function externalPoster(page: any): string | undefined {
+  return page.properties['封面']?.files?.find((file: any) => file.type === 'external')?.external?.url;
+}
+
+
 dotenv.config();
 
 const notion = new Client({
@@ -156,7 +199,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
   };
   const newFeeds = categorizedFeeds.filter(item => {
     const page = existingPages.get(item.link.replace(/^http:/, 'https:'));
-    return !page || (process.env.DOUBAN_RSS_ONLY !== 'true' && needsDetails(page));
+    return !page || !!externalPoster(page) || (process.env.DOUBAN_RSS_ONLY !== 'true' && needsDetails(page));
   });
   consola.info(`There are total ${newFeeds.length} new or incomplete ${category} item(s) to sync.`);
 
@@ -164,9 +207,10 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
 
   for (const newFeedItem of newFeeds) {
     try {
-      // RSS-only mode avoids Douban detail pages while access is restricted.
+      const currentPage = existingPages.get(newFeedItem.link.replace(/^http:/, 'https:'));
+      // Cover-only repairs do not request the detail page again.
       let itemData: Record<string, string | string[] | number | null | undefined>;
-      if (process.env.DOUBAN_RSS_ONLY === 'true') {
+      if (process.env.DOUBAN_RSS_ONLY === 'true' || (currentPage && !needsDetails(currentPage))) {
         if (!newFeedItem.title) throw new Error('RSS item has no usable title: ' + newFeedItem.link);
         const titleKey = category === ItemCategory.Movie ? DB_PROPERTIES.MOVIE_TITLE
           : category === ItemCategory.Book ? DB_PROPERTIES.BOOK_TITLE
@@ -175,7 +219,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
         itemData = {
           [DB_PROPERTIES.NAME]: newFeedItem.title,
           [titleKey]: newFeedItem.title,
-          [category === ItemCategory.Movie ? DB_PROPERTIES.POSTER : DB_PROPERTIES.COVER]: newFeedItem.cover,
+          [category === ItemCategory.Movie ? DB_PROPERTIES.POSTER : DB_PROPERTIES.COVER]: externalPoster(currentPage || {properties:{}}) || newFeedItem.cover,
         };
         consola.info('Using RSS metadata only; detail-only fields remain empty.');
       } else {
@@ -272,11 +316,22 @@ async function addItemToNotion(itemData: {
       }
     }
 
+    const coverName = columns.includes('封面') ? '封面' : DB_PROPERTIES.POSTER;
+    const sourcePoster = properties[coverName]?.files?.[0]?.external?.url;
+    const currentFiles = existing?.properties[coverName]?.files || [];
+    let uploadedCover: Awaited<ReturnType<typeof uploadPoster>> | undefined;
+    if (sourcePoster && (!existing || currentFiles.length === 0 || externalPoster(existing))) {
+      uploadedCover = await uploadPoster(sourcePoster);
+      properties[coverName] = { files: [{ name: '豆瓣封面', ...uploadedCover }] };
+    }
+
     if (existing) {
-      // Enrich missing catalog data only; preserve personal annotations and uploaded covers.
+      // Preserve existing uploaded files; migrate fragile external poster URLs.
+
       const patch = missingDetailPatch(properties, existing);
+      if (uploadedCover) patch[coverName] = properties[coverName];
       if (Object.keys(patch).length) {
-        await notion.pages.update({ page_id: existing.id, properties: patch });
+        await notion.pages.update({ page_id: existing.id, properties: patch, ...(uploadedCover ? {cover:uploadedCover} : {}) });
         consola.success('Enriched existing item: ' + itemData[DB_PROPERTIES.NAME] + ' fields=' + Object.keys(patch).join(','));
       }
       return true;
@@ -295,15 +350,7 @@ async function addItemToNotion(itemData: {
       properties,
     };
 
-    if (properties[DB_PROPERTIES.POSTER] || properties[DB_PROPERTIES.COVER]) {
-      // use poster for the page cover
-      postData.cover = {
-        type: 'external',
-        external: {
-          url: (properties[DB_PROPERTIES.POSTER] || properties[DB_PROPERTIES.COVER])?.files[0]?.external?.url, // cannot be empty string or null
-        },
-      };
-    }
+    if (uploadedCover) postData.cover = uploadedCover;
 
     if ((category === ItemCategory.Movie || category === ItemCategory.Book) &&
         !db.properties[DB_PROPERTIES.COMMENTS] && itemData[DB_PROPERTIES.COMMENTS]) {
