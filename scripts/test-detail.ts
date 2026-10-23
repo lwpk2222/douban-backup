@@ -117,3 +117,9 @@ assert.equal(wishlistMark['观影日期'],undefined);
 recordDatePage.properties['记录日期'].date={start:'2026-10-20'};
 assert.equal(rssMarkPatch(markFeed,recordDatePage)['记录日期'].date.start,'2026-10-23');
 console.log('Shared record date tracks wishlist and watched marks using the renamed movie field.');
+
+const { markDateInShanghai } = await import('../src/handle-notion');
+assert.equal(markDateInShanghai('2026-09-19T17:41:10Z'),'2026-09-20');
+assert.equal(markDateInShanghai('2026-10-23T15:16:39Z'),'2026-10-23');
+assert.throws(()=>markDateInShanghai('invalid'),/Invalid/);
+console.log('RSS UTC timestamps convert correctly to Douban China calendar dates.');
