@@ -45,13 +45,21 @@ export function missingDetailPatch(properties: Record<string, any>, existing: an
 
 
 /** Douban owns mark properties; page body and uploaded files are never touched here. */
+
+/** Douban displays mark dates in China time, while RSS timestamps are UTC. */
+export function markDateInShanghai(time:unknown):string {
+  const stamp=Date.parse(String(time));
+  if (!Number.isFinite(stamp)) throw new Error('Invalid RSS mark date');
+  return new Date(stamp+8*60*60*1000).toISOString().slice(0,10);
+}
+
 export function rssMarkPatch(feed: FeedItem, existing: any): Record<string, any> {
   const movie = feed.category === ItemCategory.Movie;
   if (!movie && feed.category !== ItemCategory.Book) return {};
   const props = existing.properties;
   const dateName = (movie ? ['记录日期', '观影日期', '观影时间'] : ['阅读日期', '阅读时间'])
     .find(name => props[name]?.type === 'date');
-  const incomingDate = dayjs(feed.time).format('YYYY-MM-DD');
+  const incomingDate = markDateInShanghai(feed.time);
   if (!dayjs(feed.time).isValid()) throw new Error('Invalid RSS mark date');
   const currentDate = dateName ? props[dateName]?.date?.start?.slice(0, 10) : null;
   // An older cached RSS mark must not roll back a newer Notion mark.
@@ -324,7 +332,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
       }
       itemData[DB_PROPERTIES.ITEM_LINK] = newFeedItem.link;
       itemData[DB_PROPERTIES.RATING] = newFeedItem.rating;
-      itemData[DB_PROPERTIES.RATING_DATE] = dayjs(newFeedItem.time).format('YYYY-MM-DD');
+      itemData[DB_PROPERTIES.RATING_DATE] = markDateInShanghai(newFeedItem.time);
       itemData[DB_PROPERTIES.COMMENTS] = newFeedItem.comment;
       if (category === ItemCategory.Movie || category === ItemCategory.Book) {
         const states = category === ItemCategory.Movie ? ['想看', '在看', '看过'] : ['想读', '在读', '读过'];
