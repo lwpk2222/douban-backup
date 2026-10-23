@@ -28,7 +28,7 @@ function movieTitleWithYear(title: string, year: unknown): string {
 
 export function missingDetailPatch(properties: Record<string, any>, existing: any): Record<string, any> {
   const patch: Record<string, any> = {};
-  const personal = new Set(['个人评分', '评分', '我的短评', '状态', '观影日期', '观影时间', '阅读日期', '阅读时间', '豆瓣链接', DB_PROPERTIES.ITEM_LINK]);
+  const personal = new Set(['个人评分', '评分', '我的短评', '状态', '记录日期', '观影日期', '观影时间', '阅读日期', '阅读时间', '豆瓣链接', DB_PROPERTIES.ITEM_LINK]);
   for (const [name, value] of Object.entries(properties)) {
     if (personal.has(name)) continue;
     const current = existing.properties[name];
@@ -49,7 +49,7 @@ export function rssMarkPatch(feed: FeedItem, existing: any): Record<string, any>
   const movie = feed.category === ItemCategory.Movie;
   if (!movie && feed.category !== ItemCategory.Book) return {};
   const props = existing.properties;
-  const dateName = (movie ? ['观影日期', '观影时间'] : ['阅读日期', '阅读时间'])
+  const dateName = (movie ? ['记录日期', '观影日期', '观影时间'] : ['阅读日期', '阅读时间'])
     .find(name => props[name]?.type === 'date');
   const incomingDate = dayjs(feed.time).format('YYYY-MM-DD');
   if (!dayjs(feed.time).isValid()) throw new Error('Invalid RSS mark date');
@@ -399,7 +399,7 @@ async function addItemToNotion(itemData: {
       [DB_PROPERTIES.ITEM_LINK]: ['豆瓣链接'],
       [DB_PROPERTIES.RATING]: ['个人评分', '评分'],
       [DB_PROPERTIES.RATING_DATE]: category === ItemCategory.Movie
-        ? ['观影日期', '观影时间'] : category === ItemCategory.Book ? ['阅读日期', '阅读时间'] : [],
+        ? ['记录日期', '观影日期', '观影时间'] : category === ItemCategory.Book ? ['阅读日期', '阅读时间'] : [],
     };
     const properties: Record<string, any> = {};
     for (const [original, value] of Object.entries(itemData)) {
