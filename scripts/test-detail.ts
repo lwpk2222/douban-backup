@@ -95,3 +95,16 @@ assert.equal(matchMovieDraft([draft('substring','再次出发')],'再次出发�
 assert.equal(matchMovieDraft([draft('empty','')],'','',2013).page,undefined);
 assert.equal(matchMovieDraft([draft('unicode','ＢＥＧＩＮ　ＡＧＡＩＮ （２０１３）')],'Begin Again','Begin Again',2013).page?.id,'unicode');
 console.log('Unique exact movie draft matching, year conflicts, duplicate ambiguity and no fuzzy matches passed.');
+
+for (const name of ['Fleabag S01','Fleabag Season 1','伦敦生活 第一季','伦敦生活 第1季','伦敦生活','Fleabag']) {
+  assert.equal(matchMovieDraft([draft('alias',name)],'伦敦生活 第一季','伦敦生活 第一季 Fleabag Season 1',2016).page?.id,'alias',name);
+}
+assert.equal(matchMovieDraft([draft('wrong-season','Fleabag S02')],'伦敦生活 第一季','伦敦生活 第一季 Fleabag Season 1',2016).page,undefined);
+assert.equal(matchMovieDraft([draft('season-only','第一季')],'伦敦生活 第一季','伦敦生活 第一季 Fleabag Season 1',2016).page,undefined);
+assert.equal(matchMovieDraft([draft('short','伦敦')],'伦敦生活 第一季','伦敦生活 第一季 Fleabag Season 1',2016).page,undefined);
+assert.equal(matchMovieDraft([draft('cn','伦敦生活 第一季'),draft('en','Fleabag S01')],'伦敦生活 第一季','伦敦生活 第一季 Fleabag Season 1',2016).ambiguous,true);
+assert.equal(matchMovieDraft([draft('bad-year','Fleabag S01 (2019)')],'伦敦生活 第一季','伦敦生活 第一季 Fleabag Season 1',2016).page,undefined);
+assert.equal(matchMovieDraft([draft('twelfth','Example S12')],'示例 第十二季','示例 第十二季 Example Season 12',2026).page?.id,'twelfth');
+assert.equal(matchMovieDraft([draft('unscoped','Fleabag S01')],'Fleabag','Fleabag',2016).page,undefined);
+assert.equal(matchMovieDraft([draft('conflicting','Fleabag S01 Season 2')],'Fleabag Season 1','Fleabag Season 1',2016).page,undefined);
+console.log('Bilingual aliases and Chinese/Season/S01 notation passed; season/year conflicts and ambiguous drafts rejected.');
