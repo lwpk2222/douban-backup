@@ -10,8 +10,8 @@ on:
       - '.github/workflows/sync-rss.js.yml'
   schedule:
     # https://docs.github.com/en/actions/reference/events-that-trigger-workflows#scheduled-events
-    # Runs every 6 hours
-    - cron:  '0 */6 * * *'
+    # Runs hourly at minute 17 to avoid the top-of-hour queue
+    - cron:  '17 * * * *'
 
 jobs:
   build:
