@@ -79,7 +79,7 @@ jobs:
         }
         NODE
     - run: npm ci
-    # Offline regression tests also protect user annotations during enrichment.
+    # Offline regression tests protect manual drafts, marks and uploaded content.
     - name: Test detail parsing and bounded verification
       run: npx tsx scripts/test-detail.ts
     - name: Verify live movie details from this runner
