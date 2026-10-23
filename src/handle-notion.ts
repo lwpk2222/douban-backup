@@ -77,24 +77,52 @@ export function rssMarkPatch(feed: FeedItem, existing: any): Record<string, any>
 }
 
 
-function titleParts(value: string): {name:string;year:string|null} {
-  const normalized = value.normalize('NFKC').trim();
-  const year = normalized.match(/\((\d{4})\)$/)?.[1] || null;
-  return {name:normalized.replace(/\s*\(\d{4}\)$/, '').replace(/\s+/g,'').toLocaleLowerCase(),year};
+type MovieTitleParts = {aliases:Set<string>;year:string|null;season:number|null;valid:boolean};
+function chineseSeason(value:string):number {
+  if (/^\d+$/.test(value)) return Number(value);
+  const digits:Record<string,number>={'零':0,'〇':0,'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9};
+  if (value.includes('十')) {
+    const [a,b]=value.split('十');
+    return (a ? digits[a] : 1)*10+(b ? digits[b] : 0);
+  }
+  return digits[value] ?? NaN;
+}
+function titleParts(value:string):MovieTitleParts {
+  let text=value.normalize('NFKC').trim();
+  const year=text.match(/\((\d{4})\)$/)?.[1] || null;
+  text=text.replace(/\s*\(\d{4}\)$/, '');
+  const seasons:number[]=[];
+  text=text.replace(/第\s*([零〇一二两三四五六七八九十\d]+)\s*季|\bseason\s*0*(\d+)\b|\bs0*(\d+)\b/gi,
+    (_,cn,en,short)=>{seasons.push(cn ? chineseSeason(cn) : Number(en || short));return ' ';});
+  const valid=seasons.every(n=>Number.isInteger(n)&&n>0) && new Set(seasons).size<=1;
+  const normalize=(s:string)=>s.toLowerCase().replace(/[\p{P}\p{S}\s]+/gu,'');
+  const aliases=new Set<string>();
+  const add=(s:string)=>{const key=normalize(s);if(key)aliases.add(key);};
+  add(text);
+  // A Chinese name followed by a separate Latin original name is a bilingual title.
+  const bilingual=text.match(/^([\p{Script=Han}\p{P}\p{N}\s]+?)\s+([A-Za-z][^\p{Script=Han}]+)$/u);
+  if (bilingual && /\p{Script=Han}/u.test(bilingual[1])) {
+    add(bilingual[1]);add(bilingual[2]);
+  }
+  return {aliases,year,season:seasons[0] || null,valid};
 }
 
-/** Exact title matching only, never fuzzy/substring matching. */
-export function matchMovieDraft(pages: any[], title: string, detailTitle: string, year: unknown,
-  titleProperty = '电影名'): {page?:any;ambiguous:boolean} {
-  const names = new Set([titleParts(title).name,titleParts(detailTitle).name].filter(Boolean));
-  const sourceYear = String(year || '').match(/\d{4}/)?.[0] || titleParts(detailTitle).year;
-  const matches = pages.filter(page => {
-    const p=page.properties[titleProperty];
-    const raw=(p?.title || []).map((t:any)=>t.plain_text || t.text?.content || '').join('');
+/** Match full Chinese/English names with equivalent season notation, never arbitrary substrings. */
+export function matchMovieDraft(pages:any[],title:string,detailTitle:string,year:unknown,
+  titleProperty='电影名'):{page?:any;ambiguous:boolean} {
+  const sources=[titleParts(title),titleParts(detailTitle)];
+  const names=new Set(sources.flatMap(p=>[...p.aliases]));
+  const sourceYear=String(year || '').match(/\d{4}/)?.[0] || sources[1].year || sources[0].year;
+  const sourceSeasons=new Set(sources.map(p=>p.season).filter(n=>n!==null));
+  if (sources.some(p=>!p.valid) || sourceSeasons.size>1) return {ambiguous:true};
+  const sourceSeason=[...sourceSeasons][0] || null;
+  const matches=pages.filter(page=>{
+    const raw=(page.properties[titleProperty]?.title || []).map((t:any)=>t.plain_text || t.text?.content || '').join('');
     const draft=titleParts(raw);
-    return draft.name && names.has(draft.name) && (!draft.year || draft.year === sourceYear);
+    return draft.valid && [...draft.aliases].some(name=>names.has(name)) &&
+      (!draft.year || draft.year===sourceYear) && (!draft.season || draft.season===sourceSeason);
   });
-  return matches.length === 1 ? {page:matches[0],ambiguous:false} : {ambiguous:matches.length>1};
+  return matches.length===1 ? {page:matches[0],ambiguous:false} : {ambiguous:matches.length>1};
 }
 
 export async function uploadPoster(url: string, request: typeof fetch = fetch) {
