@@ -76,6 +76,27 @@ export function rssMarkPatch(feed: FeedItem, existing: any): Record<string, any>
   return patch;
 }
 
+
+function titleParts(value: string): {name:string;year:string|null} {
+  const normalized = value.normalize('NFKC').trim();
+  const year = normalized.match(/\((\d{4})\)$/)?.[1] || null;
+  return {name:normalized.replace(/\s*\(\d{4}\)$/, '').replace(/\s+/g,'').toLocaleLowerCase(),year};
+}
+
+/** Exact title matching only, never fuzzy/substring matching. */
+export function matchMovieDraft(pages: any[], title: string, detailTitle: string, year: unknown,
+  titleProperty = '电影名'): {page?:any;ambiguous:boolean} {
+  const names = new Set([titleParts(title).name,titleParts(detailTitle).name].filter(Boolean));
+  const sourceYear = String(year || '').match(/\d{4}/)?.[0] || titleParts(detailTitle).year;
+  const matches = pages.filter(page => {
+    const p=page.properties[titleProperty];
+    const raw=(p?.title || []).map((t:any)=>t.plain_text || t.text?.content || '').join('');
+    const draft=titleParts(raw);
+    return draft.name && names.has(draft.name) && (!draft.year || draft.year === sourceYear);
+  });
+  return matches.length === 1 ? {page:matches[0],ambiguous:false} : {ambiguous:matches.length>1};
+}
+
 export async function uploadPoster(url: string, request: typeof fetch = fetch) {
   const source = new URL(url);
   if (source.protocol !== 'https:' || !/(^|\.)doubanio\.com$/.test(source.hostname)) {
@@ -217,6 +238,21 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
       if (link) existingPages.set(link.replace(/^http:/, 'https:'), page);
     }
   }
+  const draftPages: any[] = [];
+  const draftTitleProperty = sourceSchema.properties['电影名'] ? '电影名' : DB_PROPERTIES.MOVIE_TITLE;
+  if (category === ItemCategory.Movie && categorizedFeeds.some(item => !existingPages.has(item.link.replace(/^http:/,'https:')))) {
+    let cursor: string | undefined;
+    do {
+      const result = await notion.dataSources.query({
+        data_source_id:dataSourceId,
+        filter:{property:itemLinkProperty,url:{is_empty:true}},
+        page_size:100, ...(cursor ? {start_cursor:cursor} : {}),
+      });
+      draftPages.push(...result.results.filter(page => 'properties' in page));
+      cursor = result.has_more ? result.next_cursor || undefined : undefined;
+    } while (cursor);
+  }
+  const claimedDraftIds = new Set<string>();
   const empty = (property: any): boolean => !property ||
     property[property.type] == null ||
     (Array.isArray(property[property.type]) && property[property.type].length === 0) ||
@@ -266,7 +302,21 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
         const states = category === ItemCategory.Movie ? ['想看', '在看', '看过'] : ['想读', '在读', '读过'];
         itemData['状态'] = states[newFeedItem.status === 'wishlist' ? 0 : newFeedItem.status === 'progress' ? 1 : 2];
       }
-      const existing = existingPages.get(newFeedItem.link.replace(/^http:/, 'https:'));
+      let existing = existingPages.get(newFeedItem.link.replace(/^http:/, 'https:'));
+      if (!existing && category === ItemCategory.Movie && draftPages.length) {
+        const draft = matchMovieDraft(draftPages, newFeedItem.title || '',
+          String(itemData[DB_PROPERTIES.MOVIE_TITLE] || ''), itemData[DB_PROPERTIES.YEAR], draftTitleProperty);
+        if (draft.ambiguous || (draft.page && claimedDraftIds.has(draft.page.id))) {
+          consola.warn('Ambiguous manual movie title; fill its Douban link to resolve: ' + newFeedItem.title);
+          failedItems.push({link:newFeedItem.link,title:newFeedItem.title || newFeedItem.id});
+          continue;
+        }
+        existing = draft.page;
+        if (existing) {
+          claimedDraftIds.add(existing.id);
+          consola.info('Matched manual movie draft by exact title: ' + newFeedItem.title);
+        }
+      }
       const successful = await addItemToNotion(itemData, category, existing, newFeedItem);
       if (!successful) {
         failedItems.push({
@@ -362,6 +412,8 @@ async function addItemToNotion(itemData: {
       // Preserve existing uploaded files; migrate fragile external poster URLs.
 
       const patch = { ...missingDetailPatch(properties, existing), ...(feed ? rssMarkPatch(feed, existing) : {}) };
+      const linkName = columns.includes('豆瓣链接') ? '豆瓣链接' : DB_PROPERTIES.ITEM_LINK;
+      if (!existing.properties[linkName]?.url && properties[linkName]) patch[linkName] = properties[linkName];
       if (uploadedCover) patch[coverName] = properties[coverName];
       if (Object.keys(patch).length) {
         await notion.pages.update({ page_id: existing.id, properties: patch, ...(uploadedCover ? {cover:uploadedCover} : {}) });
