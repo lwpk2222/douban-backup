@@ -83,3 +83,15 @@ assert.deepEqual(rssMarkPatch({...markFeed,time:'2026-10-22T15:16:39Z',status:'w
 assert.equal(rssMarkPatch({...markFeed,rating:null},synced)['个人评分'].select,null);
 assert.equal(rssMarkPatch({...markFeed,comment:''},synced)['我的短评'].rich_text.length,0);
 console.log('Existing wishlist-to-watched updates, idempotency, stale RSS protection and removed marks passed.');
+
+const { matchMovieDraft } = await import('../src/handle-notion');
+const draft=(id:string,title:string)=>({id,properties:{'电影名':{type:'title',title:[{text:{content:title}}]}}});
+const manual=draft('manual',' 再次出发之纽约遇见你 ');
+assert.equal(matchMovieDraft([manual],'再次出发之纽约遇见你','再次出发之纽约遇见你 Begin Again',2013).page?.id,'manual');
+assert.equal(matchMovieDraft([draft('year','Begin Again (2013)')],'再次出发之纽约遇见你','Begin Again',2013).page?.id,'year');
+assert.equal(matchMovieDraft([draft('wrong','Begin Again (2020)')],'再次出发之纽约遇见你','Begin Again',2013).page,undefined);
+assert.equal(matchMovieDraft([manual,draft('duplicate','再次出发之纽约遇见你')],'再次出发之纽约遇见你','Begin Again',2013).ambiguous,true);
+assert.equal(matchMovieDraft([draft('substring','再次出发')],'再次出发之纽约遇见你','Begin Again',2013).page,undefined);
+assert.equal(matchMovieDraft([draft('empty','')],'','',2013).page,undefined);
+assert.equal(matchMovieDraft([draft('unicode','ＢＥＧＩＮ　ＡＧＡＩＮ （２０１３）')],'Begin Again','Begin Again',2013).page?.id,'unicode');
+console.log('Unique exact movie draft matching, year conflicts, duplicate ambiguity and no fuzzy matches passed.');
