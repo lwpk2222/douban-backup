@@ -43,6 +43,39 @@ export function missingDetailPatch(properties: Record<string, any>, existing: an
 }
 
 
+
+/** Douban owns mark properties; page body and uploaded files are never touched here. */
+export function rssMarkPatch(feed: FeedItem, existing: any): Record<string, any> {
+  const movie = feed.category === ItemCategory.Movie;
+  if (!movie && feed.category !== ItemCategory.Book) return {};
+  const props = existing.properties;
+  const dateName = (movie ? ['观影日期', '观影时间'] : ['阅读日期', '阅读时间'])
+    .find(name => props[name]?.type === 'date');
+  const incomingDate = dayjs(feed.time).format('YYYY-MM-DD');
+  if (!dayjs(feed.time).isValid()) throw new Error('Invalid RSS mark date');
+  const currentDate = dateName ? props[dateName]?.date?.start?.slice(0, 10) : null;
+  // An older cached RSS mark must not roll back a newer Notion mark.
+  if (currentDate && incomingDate < currentDate) return {};
+  const states = movie ? ['想看', '在看', '看过'] : ['想读', '在读', '读过'];
+  const patch: Record<string, any> = {};
+  const state = states[feed.status === 'wishlist' ? 0 : feed.status === 'progress' ? 1 : 2];
+  if (props['状态']?.type === 'select' && props['状态'].select?.name !== state)
+    patch['状态'] = { select: { name: state } };
+  if (dateName && currentDate !== incomingDate) patch[dateName] = {date:{start:incomingDate}};
+  const ratingName = ['个人评分', '评分'].find(name => props[name]?.type === 'select');
+  const rating = Number(feed.rating);
+  const stars = Number.isInteger(rating) && rating >= 1 && rating <= 5 ? '⭐'.repeat(rating) : null;
+  if (ratingName && (props[ratingName].select?.name || null) !== stars)
+    patch[ratingName] = {select: stars ? {name:stars} : null};
+  const comment = feed.comment || '';
+  const currentComment = (props['我的短评']?.rich_text || []).map((t:any) => t.plain_text || t.text?.content || '').join('');
+  if (props['我的短评']?.type === 'rich_text' && currentComment !== comment) {
+    patch['我的短评'] = {rich_text: comment ? Array.from({length:Math.ceil(comment.length / 2000)}, (_,i) =>
+      ({type:'text',text:{content:comment.slice(i*2000,(i+1)*2000)}})) : []};
+  }
+  return patch;
+}
+
 export async function uploadPoster(url: string, request: typeof fetch = fetch) {
   const source = new URL(url);
   if (source.protocol !== 'https:' || !/(^|\.)doubanio\.com$/.test(source.hostname)) {
@@ -199,7 +232,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
   };
   const newFeeds = categorizedFeeds.filter(item => {
     const page = existingPages.get(item.link.replace(/^http:/, 'https:'));
-    return !page || !!externalPoster(page) || (process.env.DOUBAN_RSS_ONLY !== 'true' && needsDetails(page));
+    return !page || Object.keys(rssMarkPatch(item, page)).length > 0 || !!externalPoster(page) || (process.env.DOUBAN_RSS_ONLY !== 'true' && needsDetails(page));
   });
   consola.info(`There are total ${newFeeds.length} new or incomplete ${category} item(s) to sync.`);
 
@@ -234,7 +267,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
         itemData['状态'] = states[newFeedItem.status === 'wishlist' ? 0 : newFeedItem.status === 'progress' ? 1 : 2];
       }
       const existing = existingPages.get(newFeedItem.link.replace(/^http:/, 'https:'));
-      const successful = await addItemToNotion(itemData, category, existing);
+      const successful = await addItemToNotion(itemData, category, existing, newFeedItem);
       if (!successful) {
         failedItems.push({
           link: newFeedItem.link,
@@ -270,7 +303,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
  */
 async function addItemToNotion(itemData: {
     [key: string]: string | string[] | number | null | undefined;
-}, category: ItemCategory, existing?: any): Promise<boolean> {
+}, category: ItemCategory, existing?: any, feed?: FeedItem): Promise<boolean> {
   consola.start(
     'Going to insert ',
     itemData[DB_PROPERTIES.RATING_DATE],
@@ -328,7 +361,7 @@ async function addItemToNotion(itemData: {
     if (existing) {
       // Preserve existing uploaded files; migrate fragile external poster URLs.
 
-      const patch = missingDetailPatch(properties, existing);
+      const patch = { ...missingDetailPatch(properties, existing), ...(feed ? rssMarkPatch(feed, existing) : {}) };
       if (uploadedCover) patch[coverName] = properties[coverName];
       if (Object.keys(patch).length) {
         await notion.pages.update({ page_id: existing.id, properties: patch, ...(uploadedCover ? {cover:uploadedCover} : {}) });
