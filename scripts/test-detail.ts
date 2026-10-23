@@ -108,3 +108,12 @@ assert.equal(matchMovieDraft([draft('twelfth','Example S12')],'示例 第十二�
 assert.equal(matchMovieDraft([draft('unscoped','Fleabag S01')],'Fleabag','Fleabag',2016).page,undefined);
 assert.equal(matchMovieDraft([draft('conflicting','Fleabag S01 Season 2')],'Fleabag Season 1','Fleabag Season 1',2016).page,undefined);
 console.log('Bilingual aliases and Chinese/Season/S01 notation passed; season/year conflicts and ambiguous drafts rejected.');
+
+const recordDatePage:any={properties:{...markPage.properties,'记录日期':{type:'date',date:null}}};
+delete recordDatePage.properties['观影日期'];
+const wishlistMark=rssMarkPatch({...markFeed,status:'wishlist',time:'2026-10-20T10:00:00Z'},recordDatePage);
+assert.equal(wishlistMark['记录日期'].date.start,'2026-10-20');
+assert.equal(wishlistMark['观影日期'],undefined);
+recordDatePage.properties['记录日期'].date={start:'2026-10-20'};
+assert.equal(rssMarkPatch(markFeed,recordDatePage)['记录日期'].date.start,'2026-10-23');
+console.log('Shared record date tracks wishlist and watched marks using the renamed movie field.');
