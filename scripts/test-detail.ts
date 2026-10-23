@@ -61,3 +61,25 @@ assert.ok(requests[2].init.body instanceof FormData);
 await assert.rejects(uploadPoster('https://example.com/a.jpg',mockFetch),/Unsupported/);
 await assert.rejects(uploadPoster('https://img2.doubanio.com/a.jpg',async () => new Response('<html>error</html>',{headers:{'Content-Type':'text/html'}})),/not an image/);
 console.log('Managed image upload multipart flow and invalid-image rejection passed.');
+
+const { rssMarkPatch } = await import('../src/handle-notion');
+const markPage = {properties:{
+  '状态':{type:'select',select:{name:'想看'}},
+  '观影日期':{type:'date',date:null},
+  '个人评分':{type:'select',select:null},
+  '我的短评':{type:'rich_text',rich_text:[]},
+  '封面':{type:'files',files:[{type:'file',file:{url:'keep'}}]},
+}};
+const markFeed:any={category:ItemCategory.Movie,status:'complete',time:'2026-10-23T15:16:39Z',rating:5,comment:'new review'};
+const markPatch=rssMarkPatch(markFeed,markPage);
+assert.equal(markPatch['状态'].select.name,'看过');
+assert.equal(markPatch['个人评分'].select.name,'⭐⭐⭐⭐⭐');
+assert.equal(markPatch['观影日期'].date.start,'2026-10-23');
+assert.equal(markPatch['我的短评'].rich_text[0].text.content,'new review');
+assert.deepEqual(Object.keys(markPatch).sort(),['状态','个人评分','观影日期','我的短评'].sort());
+const synced:any={properties:{...markPage.properties,...Object.fromEntries(Object.entries(markPatch).map(([name,value]:any)=>[name,{type:Object.keys(value)[0],...value}]))}};
+assert.deepEqual(rssMarkPatch(markFeed,synced),{});
+assert.deepEqual(rssMarkPatch({...markFeed,time:'2026-10-22T15:16:39Z',status:'wishlist'},synced),{});
+assert.equal(rssMarkPatch({...markFeed,rating:null},synced)['个人评分'].select,null);
+assert.equal(rssMarkPatch({...markFeed,comment:''},synced)['我的短评'].rich_text.length,0);
+console.log('Existing wishlist-to-watched updates, idempotency, stale RSS protection and removed marks passed.');
