@@ -52,7 +52,7 @@ jobs:
           });
           if (!response.ok) throw new Error(category + ' Notion access check failed: HTTP ' + response.status);
           const data = await response.json();
-          const date = category === 'movie' ? '观影日期' : '阅读日期';
+          const date = category === 'movie' ? (data.properties['记录日期'] ? '记录日期' : '观影日期') : '阅读日期';
           const expected = {
             [category === 'movie' ? '电影名' : '书名']: 'title',
             [date]: 'date', '个人评分': 'select', '状态': 'select',
