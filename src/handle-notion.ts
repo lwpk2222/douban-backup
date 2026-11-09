@@ -17,6 +17,36 @@ import {
 // https://github.com/makenotion/notion-sdk-js/issues/280#issuecomment-1178523498
 type EmojiRequest = Extract<CreatePageParameters['icon'], { type?: 'emoji'; }>['emoji'];
 
+
+/** English movie properties at the Notion boundary; Douban extraction and book schemas stay unchanged. */
+export const MOVIE_FIELD_NAMES: Record<string,string> = {
+  "电影名": "Title",
+  "封面": "Poster",
+  "类型": "Genres",
+  "制片国家/地区": "Country",
+  "片长": "Runtime",
+  "豆瓣评分": "Douban Rating",
+  "个人评分": "My Rating",
+  "状态": "Status",
+  "记录日期": "Logged On",
+  "我的短评": "My Review",
+  "豆瓣链接": "Douban URL",
+  "和谁看": "Watched With",
+  "城市": "City",
+  "地点": "Location"
+};
+export function movieFieldView<T extends {properties:Record<string,any>}>(record:T):T {
+  const legacy = new Map(Object.entries(MOVIE_FIELD_NAMES).map(([oldName,newName])=>[newName,oldName]));
+  return {...record,properties:Object.fromEntries(Object.entries(record.properties).map(([name,value])=>
+    [legacy.get(name) || name,value]))};
+}
+export function movieWriteProperties(properties:Record<string,any>, schema:{properties:Record<string,any>}):Record<string,any> {
+  return Object.fromEntries(Object.entries(properties).map(([name,value])=>{
+    const english=MOVIE_FIELD_NAMES[name];
+    return [english && schema.properties[english] ? english : name,value];
+  }));
+}
+
 function movieTitleWithYear(title: string, year: unknown): string {
   const match = String(year ?? '').trim().match(/^(\d{4})(?:\.0)?$/);
   if (!match) return title;
@@ -248,8 +278,10 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
 
   consola.start(`Handling ${category} feeds...`);
 
-  const sourceSchema = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
-  const itemLinkProperty = sourceSchema.properties['豆瓣链接'] ? '豆瓣链接' : DB_PROPERTIES.ITEM_LINK;
+  const rawSourceSchema = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
+  const sourceSchema = category === ItemCategory.Movie ? movieFieldView(rawSourceSchema) : rawSourceSchema;
+  const itemLinkProperty = category === ItemCategory.Movie && rawSourceSchema.properties['Douban URL']
+    ? 'Douban URL' : sourceSchema.properties['豆瓣链接'] ? '豆瓣链接' : DB_PROPERTIES.ITEM_LINK;
 
   // after @notionhq sdk upgraded to v5.0.0, use dataSource instead of database
   const queryItems = await notion.dataSources.query({
@@ -271,7 +303,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
   for (const page of queryItems.results) {
     if ('properties' in page) {
       const link = (page.properties[itemLinkProperty] as NotionUrlPropType).url;
-      if (link) existingPages.set(link.replace(/^http:/, 'https:'), page);
+      if (link) existingPages.set(link.replace(/^http:/, 'https:'), category === ItemCategory.Movie ? movieFieldView(page) : page);
     }
   }
   const draftPages: any[] = [];
@@ -284,7 +316,7 @@ async function syncNotionDB(categorizedFeeds: FeedItem[], category: ItemCategory
         filter:{property:itemLinkProperty,url:{is_empty:true}},
         page_size:100, ...(cursor ? {start_cursor:cursor} : {}),
       });
-      draftPages.push(...result.results.filter(page => 'properties' in page));
+      draftPages.push(...result.results.filter(page => 'properties' in page).map(page => movieFieldView(page as any)));
       cursor = result.has_more ? result.next_cursor || undefined : undefined;
     } while (cursor);
   }
@@ -398,7 +430,8 @@ async function addItemToNotion(itemData: {
   try {
     const dataSourceId = getDataSourceId(category);
     if (!dataSourceId) throw new Error('No data source id found for category: ' + category);
-    const db = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
+    const rawDb = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
+    const db = category === ItemCategory.Movie ? movieFieldView(rawDb) : rawDb;
     const columns = Object.keys(db.properties);
     const aliases: Record<string, string[]> = {
       [DB_PROPERTIES.MOVIE_TITLE]: ['电影名'],
@@ -452,7 +485,7 @@ async function addItemToNotion(itemData: {
       if (!existing.properties[linkName]?.url && properties[linkName]) patch[linkName] = properties[linkName];
       if (uploadedCover) patch[coverName] = properties[coverName];
       if (Object.keys(patch).length) {
-        await notion.pages.update({ page_id: existing.id, properties: patch, ...(uploadedCover ? {cover:uploadedCover} : {}) });
+        await notion.pages.update({ page_id: existing.id, properties: category === ItemCategory.Movie ? movieWriteProperties(patch,rawDb) : patch, ...(uploadedCover ? {cover:uploadedCover} : {}) });
         consola.success('Enriched existing item: ' + itemData[DB_PROPERTIES.NAME] + ' fields=' + Object.keys(patch).join(','));
       }
       return true;
@@ -468,7 +501,7 @@ async function addItemToNotion(itemData: {
         emoji: EMOJI[category] as EmojiRequest,
       },
       // fill in properties by the format: https://developers.notion.com/reference/page#page-property-value
-      properties,
+      properties: category === ItemCategory.Movie ? movieWriteProperties(properties,rawDb) : properties,
     };
 
     if (uploadedCover) postData.cover = uploadedCover;
