@@ -52,6 +52,12 @@ jobs:
           });
           if (!response.ok) throw new Error(category + ' Notion access check failed: HTTP ' + response.status);
           const data = await response.json();
+          if (category === 'movie') {
+            const fieldNames = {"电影名":"Title","封面":"Poster","类型":"Genres","制片国家/地区":"Country","片长":"Runtime","豆瓣评分":"Douban Rating","个人评分":"My Rating","状态":"Status","记录日期":"Logged On","我的短评":"My Review","豆瓣链接":"Douban URL","和谁看":"Watched With","城市":"City","地点":"Location"};
+            for (const [legacy,english] of Object.entries(fieldNames)) {
+              if (data.properties[english]) data.properties[legacy]=data.properties[english];
+            }
+          }
           const date = category === 'movie' ? (data.properties['记录日期'] ? '记录日期' : '观影日期') : '阅读日期';
           const expected = {
             [category === 'movie' ? '电影名' : '书名']: 'title',
@@ -79,7 +85,7 @@ jobs:
         }
         NODE
     - run: npm ci
-    # Offline regression tests protect China record dates, bilingual drafts and uploaded content.
+    # Offline regression tests protect English movie fields, China dates and uploaded content.
     - name: Test detail parsing and bounded verification
       run: npx tsx scripts/test-detail.ts
     - name: Verify live movie details from this runner
