@@ -123,3 +123,34 @@ assert.equal(markDateInShanghai('2026-09-19T17:41:10Z'),'2026-09-20');
 assert.equal(markDateInShanghai('2026-10-23T15:16:39Z'),'2026-10-23');
 assert.throws(()=>markDateInShanghai('invalid'),/Invalid/);
 console.log('RSS UTC timestamps convert correctly to Douban China calendar dates.');
+
+const { movieFieldView, movieWriteProperties, MOVIE_FIELD_NAMES } = await import('../src/handle-notion');
+const englishProperties:any={
+  'Title':{type:'title',title:[{text:{content:'Fleabag S01'}}]},
+  'Poster':{type:'files',files:[{type:'file',file:{url:'keep'}}]},
+  'My Rating':{type:'select',select:null},
+  'Status':{type:'select',select:{name:'想看'}},
+  'Logged On':{type:'date',date:null},
+  'My Review':{type:'rich_text',rich_text:[]},
+  'Douban URL':{type:'url',url:null},
+  'Watched With':{type:'multi_select',multi_select:[{name:'独自一人'}]},
+  'City':{type:'select',select:{name:'福州'}},
+  'Location':{type:'rich_text',rich_text:[{text:{content:'keep location'}}]},
+};
+const englishSchema:any={properties:Object.fromEntries(Object.values(MOVIE_FIELD_NAMES).map(name=>[name,{}]))};
+const legacyEnglish=movieFieldView({id:'english-draft',properties:englishProperties});
+assert.equal(matchMovieDraft([legacyEnglish],'伦敦生活 第一季','伦敦生活 第一季 Fleabag Season 1',2016).page?.id,'english-draft');
+const englishMark=movieWriteProperties(rssMarkPatch(markFeed,legacyEnglish),englishSchema);
+assert.equal(englishMark['Status'].select.name,'看过');
+assert.equal(englishMark['My Rating'].select.name,'⭐⭐⭐⭐⭐');
+assert.equal(englishMark['Logged On'].date.start,'2026-10-23');
+assert.equal(englishMark['My Review'].rich_text[0].text.content,'new review');
+assert.equal(englishMark['Watched With'],undefined);
+assert.equal(englishMark['City'],undefined);
+assert.equal(englishMark['Location'],undefined);
+const allFieldValues=Object.fromEntries(Object.keys(MOVIE_FIELD_NAMES).map(k=>[k,{sentinel:k}]));
+const translated=movieWriteProperties(allFieldValues,englishSchema);
+assert.deepEqual(Object.keys(translated).sort(),Object.values(MOVIE_FIELD_NAMES).sort());
+assert.equal(movieFieldView({properties:translated}).properties['豆瓣链接'].sentinel,'豆瓣链接');
+assert.deepEqual(movieWriteProperties({'我的短评':{rich_text:[]}}, {properties:{'我的短评':{}}}),{'我的短评':{rich_text:[]}});
+console.log('All 14 English movie fields, draft matching and mark updates passed; book fields and personal viewing context preserved.');
