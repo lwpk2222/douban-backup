@@ -58,6 +58,7 @@ jobs:
               if (data.properties[english]) data.properties[legacy]=data.properties[english];
             }
           }
+          if (category === 'movie' && data.properties['Title']) console.log('English movie schema verified against renamed Notion library');
           const date = category === 'movie' ? (data.properties['记录日期'] ? '记录日期' : '观影日期') : '阅读日期';
           const expected = {
             [category === 'movie' ? '电影名' : '书名']: 'title',
